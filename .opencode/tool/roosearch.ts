@@ -1,6 +1,9 @@
 import { tool } from "@opencode-ai/plugin"
 import { QdrantClient } from "@qdrant/js-client-rest"
 
+export const WORKSPACE_VECTOR_STORE_NAME = "ws-af21e72f6bd2e09c" 
+//"ws-e9be3207f7247f18"
+
 export interface VectorStoreSearchResult {
   id: string | number
   score: number
@@ -36,7 +39,6 @@ export const qdrantClient: QdrantClient = new QdrantClient({
   url: "http://localhost:6333",
 })
 
-
 const createEmbeddings = async (input: string): Promise<EmbeddingResponse> => {
   const url = "http://localhost:11434/api/embed"
   const model = "nomic-embed-text"
@@ -60,6 +62,7 @@ const createEmbeddings = async (input: string): Promise<EmbeddingResponse> => {
     const data = await response.json() as EmbeddingResponse
     return data
   } catch (error) {
+    console.error("Embedding creation failed:", error)
     throw new Error(`Embedding creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
@@ -81,7 +84,7 @@ export const searchQdrant = async (embedding: EmbeddingResponse): Promise<Vector
   }
   
   try {
-    const operationResult = await qdrantClient.query("ws-e9be3207f7247f18", searchRequest)
+    const operationResult = await qdrantClient.query(WORKSPACE_VECTOR_STORE_NAME, searchRequest)
     return operationResult.points as VectorStoreSearchResult[]
   } catch (error) {
     throw new Error(`Search operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -90,14 +93,16 @@ export const searchQdrant = async (embedding: EmbeddingResponse): Promise<Vector
 
 
 const filterValidResults = (results: VectorStoreSearchResult[]): VectorStoreSearchResult[] => {
-  return results.filter(result => 
-    result.payload && 
-    "filePath" in result.payload && 
-    result.payload.filePath &&
-    result.payload.startLine &&
-    result.payload.endLine &&
-    result.payload.codeChunk
-  )
+  const filtered = results.filter(result => {
+    const isValid = result.payload && 
+                   "filePath" in result.payload && 
+                   result.payload.filePath &&
+                   result.payload.startLine &&
+                   result.payload.endLine &&
+                   result.payload.codeChunk
+    return isValid
+  })
+  return filtered
 }
 
 const transformSearchResult = (result: VectorStoreSearchResult): SearchResult | null => {
@@ -165,12 +170,13 @@ const executeSearchPipeline = async (query: string): Promise<string> => {
     const transformedResults = transformResults(searchResults)
     return formatResults(transformedResults, query)
   } catch (error) {
+    console.error("Error executing search pipeline:", error)
     return `Error executing search: ${error instanceof Error ? error.message : 'Unknown error'}`
   }
 }
 
 export default tool({
-  description: "Query the cuent workspace using roo code qdrant indexing",
+  description: "Query the code workspace using roo code qdrant indexing",
   args: {
     query: tool.schema.string().describe("Search query string"),
   },
