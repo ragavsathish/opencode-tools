@@ -1,16 +1,38 @@
 import { tool } from "@opencode-ai/plugin"
 import { QdrantClient } from "@qdrant/js-client-rest"
+import { createHash } from "crypto"
 
-export const WORKSPACE_VECTOR_STORE_NAME = "ws-af21e72f6bd2e09c" 
-//"ws-e9be3207f7247f18"
+interface RooSearchConfig {
+  qdrantClientUrl: string
+  embeddingServiceUrl: string
+  embeddingModel: string
+  searchScoreThreshold: number
+  searchLimit: number
+  hnswEf: number
+  hnswExact: boolean
+  payloadIncludeFields: string[]
+  hashLength: number
+}
 
-export interface VectorStoreSearchResult {
+const ROO_SEARCH_CONFIG: RooSearchConfig = {
+  qdrantClientUrl: "http://localhost:6333",
+  embeddingServiceUrl: "http://localhost:11434/api/embed",
+  embeddingModel: "nomic-embed-text",
+  searchScoreThreshold: 0.40,
+  searchLimit: 50,
+  hnswEf: 128,
+  hnswExact: false,
+  payloadIncludeFields: ["filePath", "codeChunk", "startLine", "endLine", "pathSegments"],
+  hashLength: 16,
+}
+
+interface VectorStoreSearchResult {
   id: string | number
   score: number
   payload?: Payload | null
 }
 
-export interface Payload {
+interface Payload {
   filePath: string
   codeChunk: string
   startLine: number
@@ -18,11 +40,11 @@ export interface Payload {
   [key: string]: any
 }
 
-export interface EmbeddingResponse {
+interface EmbeddingResponse {
   embeddings: number[][]
 }
 
-export interface SearchResult {
+interface SearchResult {
   filePath: string
   score: number
   startLine: number
@@ -30,19 +52,25 @@ export interface SearchResult {
   codeChunk: string
 }
 
-export interface SearchResults {
+interface SearchResults {
   query: string
   results: readonly SearchResult[]
 }
 
-export const qdrantClient: QdrantClient = new QdrantClient({
-  url: "http://localhost:6333",
+const qdrantClient: QdrantClient = new QdrantClient({
+  url: ROO_SEARCH_CONFIG.qdrantClientUrl,
 })
 
+const getWorkspaceVectorStoreName = (): string => {
+  const workspacePath = process.cwd()
+  const hash = createHash("sha256").update(workspacePath).digest("hex")
+  return `ws-${hash.substring(0, ROO_SEARCH_CONFIG.hashLength)}`
+}
+
 const createEmbeddings = async (input: string): Promise<EmbeddingResponse> => {
-  const url = "http://localhost:11434/api/embed"
-  const model = "nomic-embed-text"
-  
+  const url = ROO_SEARCH_CONFIG.embeddingServiceUrl
+  const model = ROO_SEARCH_CONFIG.embeddingModel
+
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -67,39 +95,37 @@ const createEmbeddings = async (input: string): Promise<EmbeddingResponse> => {
   }
 }
 
-
-export const searchQdrant = async (embedding: EmbeddingResponse): Promise<VectorStoreSearchResult[]> => {
+const searchQdrant = async (embedding: EmbeddingResponse): Promise<VectorStoreSearchResult[]> => {
   const searchRequest = {
     query: embedding.embeddings[0],
     filter: undefined,
-    score_threshold: .40,
-    limit: 50,
+    score_threshold: ROO_SEARCH_CONFIG.searchScoreThreshold,
+    limit: ROO_SEARCH_CONFIG.searchLimit,
     params: {
-      hnsw_ef: 128,
-      exact: false,
+      hnsw_ef: ROO_SEARCH_CONFIG.hnswEf,
+      exact: ROO_SEARCH_CONFIG.hnswExact,
     },
     with_payload: {
-      include: ["filePath", "codeChunk", "startLine", "endLine", "pathSegments"],
+      include: ROO_SEARCH_CONFIG.payloadIncludeFields,
     },
   }
-  
+
   try {
-    const operationResult = await qdrantClient.query(WORKSPACE_VECTOR_STORE_NAME, searchRequest)
+    const operationResult = await qdrantClient.query(getWorkspaceVectorStoreName(), searchRequest)
     return operationResult.points as VectorStoreSearchResult[]
   } catch (error) {
     throw new Error(`Search operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
 
-
 const filterValidResults = (results: VectorStoreSearchResult[]): VectorStoreSearchResult[] => {
   const filtered = results.filter(result => {
-    const isValid = result.payload && 
-                   "filePath" in result.payload && 
-                   result.payload.filePath &&
-                   result.payload.startLine &&
-                   result.payload.endLine &&
-                   result.payload.codeChunk
+    const isValid = result.payload &&
+      "filePath" in result.payload &&
+      result.payload.filePath &&
+      result.payload.startLine &&
+      result.payload.endLine &&
+      result.payload.codeChunk
     return isValid
   })
   return filtered
@@ -109,7 +135,7 @@ const transformSearchResult = (result: VectorStoreSearchResult): SearchResult | 
   if (!result.payload || !("filePath" in result.payload)) {
     return null
   }
-  
+
   return {
     filePath: result.payload.filePath,
     score: result.score,
@@ -124,7 +150,7 @@ const transformResults = (results: VectorStoreSearchResult[]): readonly SearchRe
   const transformed = filteredResults
     .map(transformSearchResult)
     .filter((result): result is SearchResult => result !== null)
-  
+
   return transformed as readonly SearchResult[]
 }
 
@@ -148,7 +174,7 @@ No results found.`
 
   const resultsArray = Array.from(results)
   const sortedResults = [...resultsArray].sort((a: SearchResult, b: SearchResult) => b.score - a.score)
-  
+
   const formattedResults = sortedResults
     .map(formatSearchResult)
     .join('\n\n')
