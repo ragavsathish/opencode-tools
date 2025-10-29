@@ -1,4 +1,5 @@
-import { tool } from "@opencode-ai/plugin"
+
+import { type Plugin, tool } from "@opencode-ai/plugin"
 import { QdrantClient } from "@qdrant/js-client-rest"
 import { createHash } from "crypto"
 
@@ -57,15 +58,14 @@ interface SearchResults {
   results: readonly SearchResult[]
 }
 
-const qdrantClient: QdrantClient = new QdrantClient({
-  url: ROO_SEARCH_CONFIG.qdrantClientUrl,
-})
-
-const getWorkspaceVectorStoreName = (): string => {
-  const workspacePath = process.cwd()
+const getWorkspaceVectorStoreName = (workspacePath: string): string => {
   const hash = createHash("sha256").update(workspacePath).digest("hex")
   return `ws-${hash.substring(0, ROO_SEARCH_CONFIG.hashLength)}`
 }
+
+const qdrantClient: QdrantClient = new QdrantClient({
+  url: ROO_SEARCH_CONFIG.qdrantClientUrl,
+})
 
 const createEmbeddings = async (input: string): Promise<EmbeddingResponse> => {
   const url = ROO_SEARCH_CONFIG.embeddingServiceUrl
@@ -95,7 +95,7 @@ const createEmbeddings = async (input: string): Promise<EmbeddingResponse> => {
   }
 }
 
-const searchQdrant = async (embedding: EmbeddingResponse): Promise<VectorStoreSearchResult[]> => {
+const searchQdrant = async (embedding: EmbeddingResponse, workspacePath: string): Promise<VectorStoreSearchResult[]> => {
   const searchRequest = {
     query: embedding.embeddings[0],
     filter: undefined,
@@ -111,7 +111,7 @@ const searchQdrant = async (embedding: EmbeddingResponse): Promise<VectorStoreSe
   }
 
   try {
-    const operationResult = await qdrantClient.query(getWorkspaceVectorStoreName(), searchRequest)
+    const operationResult = await qdrantClient.query(getWorkspaceVectorStoreName(workspacePath), searchRequest)
     return operationResult.points as VectorStoreSearchResult[]
   } catch (error) {
     throw new Error(`Search operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -189,10 +189,10 @@ ${formattedResults}
 Search completed with ${results.length} result${results.length !== 1 ? 's' : ''}.`
 }
 
-const executeSearchPipeline = async (query: string): Promise<string> => {
+const executeSearchPipeline = async (query: string, workspacePath: string): Promise<string> => {
   try {
     const embeddingResponse = await createEmbeddings(query)
-    const searchResults = await searchQdrant(embeddingResponse)
+    const searchResults = await searchQdrant(embeddingResponse, workspacePath)
     const transformedResults = transformResults(searchResults)
     return formatResults(transformedResults, query)
   } catch (error) {
@@ -201,12 +201,20 @@ const executeSearchPipeline = async (query: string): Promise<string> => {
   }
 }
 
-export default tool({
-  description: "Query the code workspace using roo code qdrant indexing",
-  args: {
-    query: tool.schema.string().describe("Search query string"),
-  },
-  async execute(args) {
-    return await executeSearchPipeline(args.query)
-  },
-})
+export const RooSearchPlugin: Plugin = async ({directory}) => {
+  return {
+    tool: {
+      roosearch: tool({
+        description: "Query the workspace using roosearch qdrant indexing",
+        args: {
+          query: tool.schema.string(),
+        },
+        async execute(args) {
+          return await executeSearchPipeline(args.query, directory)
+        },
+      }),
+    },
+  }
+}
+
+
